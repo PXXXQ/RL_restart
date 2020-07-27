@@ -5,6 +5,7 @@ import numpy as np
 import multiprocessing as mp
 import gym
 import redis
+from copy import deepcopy
 
 from common.common import serialize, deserialize
 
@@ -79,16 +80,58 @@ class DQN_net(nn.Module):
                 for item in single_result[key]:
                     self.memory_pool[key].append(item)
 
-    def train(self):
-        pass
+    def clear_memory(self):
+        self.memory_pool = dict(state=[], action=[], reward=[], next_state=[], done=[])
+
+
+def train_net(net, memory_pool):
+
+    dtype = torch.float32
+    device = torch.device('cuda', 0)
+    net.to(device)
+
+    state = torch.tensor(memory_pool["state"], dtype=dtype).to(device)
+    next_state = torch.tensor(memory_pool["next_state"], dtype=dtype).to(device)
+    reward = torch.tensor(memory_pool["reward"], dtype=dtype).to(device)
+    done = torch.tensor(memory_pool["done"], dtype=dtype).to(device)
+    action = torch.tensor(memory_pool["action"], dtype=dtype).to(device)
+
+    q_state = net.forward(state)
+    q_action = q_state.gather(-1, action.long().unsqueeze(-1))
+    with torch.no_grad():
+        q_next_state = net.forward(next_state)
+        q_next_max = torch.max(q_next_state, -1, keepdim=True)[0]
+
+    print(len(memory_pool["state"]))
+
+    # print(q_next_max.shape)
+    # print(done.shape)
+    # print(reward.shape)
+    # print(q_action.shape)
+
+    q_dev = q_next_max * done.unsqueeze(-1) + reward.unsqueeze(-1) - q_action
+
+    optimizer = torch.optim.Adam(net.parameters(), lr=1e-4)
+    loss = q_dev.pow(2).mean()
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+
+    net.to(torch.device("cpu"))
 
 
 if __name__ == "__main__":
     agent = DQN_net(4, 32, 2)
-    agent.sample(10)
 
-    print(agent.memory_pool)
-    print("agent_length", len(agent.memory_pool["state"]))
+    for _ in range(10):
+
+        agent.clear_memory()
+        agent.sample(10)
+
+        print(agent.memory_pool)
+        print("agent_length", len(agent.memory_pool["state"]))
+
+        train_net(agent, deepcopy(agent.memory_pool))
 
 
 
